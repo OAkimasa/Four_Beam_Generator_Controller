@@ -1,6 +1,6 @@
 # Four_Beam_Generator_Controller
 
-↓ View of changing the ray: 9" ～ 46" diameter LGS asterism
+↓ View of changing the ray: 9" ～ 23", 28" ～ 46" diameter LGS asterism
 ![change_arcsec](https://user-images.githubusercontent.com/80835540/185977927-c7cbb39c-0e83-4628-ba92-975bc8020df1.gif)
 
 ↓ Image Rotator
