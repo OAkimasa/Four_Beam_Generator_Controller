@@ -5,7 +5,7 @@ import time
 
 
 from optics_params import all_params
-from step2_target_params import target_params_step2
+from generate_TTM_nV import generate_TTM_nV_ans
 
 # ---- 単位は mm ----
 
@@ -19,13 +19,36 @@ LLT_power = 12.5  # LLT magnifying power
 BE_pupill_R = 18  # BE pupil radius [mm]（仮）
 
 IMR_rot_deg = 0  # IMR rotation angle [deg]
+# target arcsec =================================================
+# OK --> [4.5" <= target_arcsec <= 11.5", 14" <= target_arcsec <= 23"]
+target_arcsec = 10
+arcsec_ray1 = arcsec_ray2 = arcsec_ray3 = arcsec_ray4 = target_arcsec
+# ===============================================================
 
 # params
 all_params = all_params()
 FM_params = all_params[0]
 BS_params = all_params[1]
-TTM1_params = all_params[2]
-TTM2_params = all_params[3]
+TTM1 = all_params[2]
+TTM2 = all_params[3]
+
+TTM1_params = [[TTM1[0][0], generate_TTM_nV_ans(arcsec_ray1)[0][0], 25.4/2],
+                [TTM1[1][0], generate_TTM_nV_ans(arcsec_ray2)[0][1], 25.4/2],
+                [TTM1[2][0], generate_TTM_nV_ans(arcsec_ray3)[0][2], 25.4/2],
+                [TTM1[3][0], generate_TTM_nV_ans(arcsec_ray4)[0][3], 25.4/2]]
+TTM2_params = [[TTM2[0][0], generate_TTM_nV_ans(arcsec_ray1)[1][0], 25.4/2],
+                [TTM2[1][0], generate_TTM_nV_ans(arcsec_ray2)[1][1], 25.4/2],
+                [TTM2[2][0], generate_TTM_nV_ans(arcsec_ray3)[1][2], 25.4/2],
+                [TTM2[3][0], generate_TTM_nV_ans(arcsec_ray4)[1][3], 25.4/2]]
+
+for i in TTM1_params:
+    nV = i[1]/np.linalg.norm(i[1])
+    print(nV)
+print("TTM1_params")
+for i in TTM2_params:
+    nV = i[1]/np.linalg.norm(i[1])
+    print(nV)
+print("TTM2_params")
 PRISM_front_params = all_params[4]
 PRISM_back_params = all_params[5]
 FBM_params = all_params[6]
@@ -366,7 +389,7 @@ def mirror_reflection(mode_flag):
 
     # 初期値(spot diagram)
     start_radius = 5.9
-    d = 0.2
+    d = 1
     size = len(np.arange(-start_radius, start_radius+0.01, d))**2
     pointsY, pointsZ = np.meshgrid(
                     np.arange(-start_radius, start_radius+0.01, d),
@@ -2954,5 +2977,5 @@ if __name__ == "__main__":
 
     print('\ntime =', round(time.time()-start, 5), 'sec')
     print('\n----------------END----------------\n')
-    plt.savefig('out_spotdiagram_rot%ddeg.png' % IMR_rot_deg)
+    #plt.savefig('out_spotdiagram_rot%ddeg.png' % IMR_rot_deg, dpi=350)
     plt.show()

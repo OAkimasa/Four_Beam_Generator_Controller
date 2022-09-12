@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import time
 
-
+from VectorFunctions import VectorFunctions
 from optics_params import all_params
-from step3_generate_TTM_nV_ans import generate_TTM_nV_ans
+from generate_TTM_nV import generate_TTM_nV_ans
 
 # ---- 単位は mm ----
 
@@ -68,209 +68,10 @@ LLT_Exit_Window_params = all_params[16]
 Evaluation_Plane_params = all_params[17]
 
 
-# 反射を計算する class
-class VectorFunctions:
-    # 受け取ったx,y,z座標から(x,y,z)の組を作る関数
-    def makePoints(self, point0, point1, point2, shape0, shape1):
-        result = [None]*(len(point0)+len(point1)+len(point2))
-        result[::3] = point0
-        result[1::3] = point1
-        result[2::3] = point2
-        result = np.array(result)
-        result = result.reshape(shape0, shape1)
-        return result
 
-    # レイトレーシング平板との交点を持つときの係数Tを計算する関数
-    def calcT_mirror(self, ray_pos, ray_dir, centerV, normalV):
-        nV = np.array(normalV)/np.linalg.norm(normalV)
-        T = (np.dot(centerV, nV)-np.dot(ray_pos, nV)) / (np.dot(ray_dir, nV))
-        return T
-
-    # レイトレーシング球面との交点を持つときの係数Tを計算する関数
-    def calcT_sphere(self, ray_pos, ray_dir, lens_pos, lens_R):
-        if lens_R < 0:
-            shiftV = lens_pos - np.array([0, 0, lens_R])
-            ray_pos = ray_pos - shiftV
-            A = np.dot(ray_dir, ray_dir)
-            B = np.dot(ray_dir, ray_pos)
-            C = np.dot(ray_pos, ray_pos) - abs(lens_R)**2
-            T = (-B + np.sqrt(B**2 - A*C)) / A
-        elif lens_R > 0:
-            shiftV = lens_pos - np.array([0, 0, lens_R])
-            ray_pos = ray_pos - shiftV
-            A = np.dot(ray_dir, ray_dir)
-            B = np.dot(ray_dir, ray_pos)
-            C = np.dot(ray_pos, ray_pos) - abs(lens_R)**2
-            T = (-B - np.sqrt(B**2 - A*C)) / A
-        return T
-
-    # レイトレーシング放物線との交点を持つときの係数Tを計算する関数
-    def calcT_parabola(self, ray_pos, ray_dir, parabola_pos, parabola_R):
-        ray_pos = ray_pos - parabola_pos
-        if ray_dir[0]==0 and ray_dir[2]==0:
-            a = 1/(2*parabola_R)
-            T = a*(ray_pos[0]**2 - ray_pos[1]/a + ray_pos[0]**2) / ray_dir[1]
-            return T
-        else:
-            if parabola_R<0:
-                a = -1/(2*parabola_R)
-                A = ray_dir[0]**2 + ray_dir[2]**2
-                B = ray_pos[0]*ray_dir[0] + ray_pos[2]*ray_dir[2] - ray_dir[1]/(2*a)
-                C = ray_pos[0]**2 + ray_pos[2]**2 - ray_pos[1]/a
-                T = (-B - np.sqrt(B**2 - A*C)) / A
-                return T
-            else:
-                a = 1/(2*parabola_R)
-                A = ray_dir[0]**2 + ray_dir[2]**2
-                B = ray_pos[0]*ray_dir[0] + ray_pos[2]*ray_dir[2] - ray_dir[1]/(2*a)
-                C = ray_pos[0]**2 + ray_pos[2]**2 - ray_pos[1]/a
-                T = (-B + np.sqrt(B**2 - A*C)) / A
-                return T
-
-    # 放物線の法線ベクトルを計算する関数
-    def calcNormal_parabola(self, ray_pos, parabola_pos, parabola_R):
-        a = abs(1/(2*parabola_R))
-        normalVx = 2*a*(ray_pos[0] - parabola_pos[0])
-        normalVy = -1
-        normalVz = 2*a*(ray_pos[2] - parabola_pos[2])
-        normalV = np.array([normalVx, normalVy, normalVz])
-        normalV = normalV/np.linalg.norm(normalV)
-        return normalV
-
-    # 反射後の方向ベクトルを計算する関数
-    def calcReflectionV(self, ray_dir, normalV):
-        ray_dir = np.array(ray_dir)/np.linalg.norm(ray_dir)
-        normalV = np.array(normalV)/np.linalg.norm(normalV)
-        outRayV = ray_dir - 2*(np.dot(ray_dir, normalV))*normalV
-        # 正規化
-        outRayV = outRayV/np.linalg.norm(outRayV)
-        return outRayV
-
-    # スネルの法則から方向ベクトルを求める関数
-    def calcRefractionV(self, ray_dir, normalV, Nin, Nout):
-        if np.dot(ray_dir, normalV) <= 0:
-            #print("内積が負です")
-            # 正規化
-            ray_dir = ray_dir/np.linalg.norm(ray_dir)
-            normalV = normalV/np.linalg.norm(normalV)
-            # 係数A
-            A = Nin/Nout
-            # 入射角
-            cos_t_in = abs(np.dot(ray_dir, normalV))
-            # 量子化誤差対策
-            if cos_t_in < -1.:
-                cos_t_in = -1.
-            elif cos_t_in > 1.:
-                cos_t_in = 1.
-            # スネルの法則
-            sin_t_in = np.sqrt(1.0 - cos_t_in**2)
-            sin_t_out = sin_t_in*A
-            if sin_t_out > 1.0:
-                # 全反射する場合
-                return np.zeros(3)
-            cos_t_out = np.sqrt(1 - sin_t_out**2)
-            # 係数B
-            B = A*cos_t_in - cos_t_out
-            # 出射光線の方向ベクトル
-            outRayV = A*ray_dir + B*normalV
-            # 正規化
-            outRayV = outRayV/np.linalg.norm(outRayV)
-        else:
-            #print("内積が正です")
-            # スネルの法則から屈折光の方向ベクトルを求める関数(右に凸の場合)
-            # 正規化
-            ray_dir = ray_dir/np.linalg.norm(ray_dir)
-            normalV = normalV/np.linalg.norm(normalV)
-            # 係数A
-            A = Nin/Nout
-            # 入射角
-            cos_t_in = abs(np.dot(ray_dir,normalV))
-            #量子化誤差対策
-            if cos_t_in<-1.:
-                cos_t_in = -1.
-            elif cos_t_in>1.:
-                cos_t_in = 1.
-            # スネルの法則
-            sin_t_in = np.sqrt(1.0 - cos_t_in**2)
-            sin_t_out = sin_t_in*A
-            if sin_t_out>1.0:
-                #全反射する場合
-                return np.zeros(3)
-            cos_t_out = np.sqrt(1 - sin_t_out**2)
-            # 係数B
-            B = -A*cos_t_in + cos_t_out
-            # 出射光線の方向ベクトル
-            outRayV = A*ray_dir + B*normalV
-            # 正規化
-            outRayV = outRayV/np.linalg.norm(outRayV)
-        return outRayV
-
-    # ２点の位置ベクトルから直線を引く関数
-    def plotLineBlue(self, startPointV, endPointV):
-        startX = startPointV[0]
-        startY = startPointV[1]
-        startZ = startPointV[2]
-        endX = endPointV[0]
-        endY = endPointV[1]
-        endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
-                'o-', ms='2', linewidth=0.5, color='blue')
-
-    def plotLineGreen(self, startPointV, endPointV):
-        startX = startPointV[0]
-        startY = startPointV[1]
-        startZ = startPointV[2]
-        endX = endPointV[0]
-        endY = endPointV[1]
-        endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
-                'o-', ms='2', linewidth=0.5, color='green')
-
-    def plotLineRed(self, startPointV, endPointV):
-        startX = startPointV[0]
-        startY = startPointV[1]
-        startZ = startPointV[2]
-        endX = endPointV[0]
-        endY = endPointV[1]
-        endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
-                'o-', ms='2', linewidth=0.5, color='r')
-
-    def plotLineOrange(self, startPointV, endPointV):
-        startX = startPointV[0]
-        startY = startPointV[1]
-        startZ = startPointV[2]
-        endX = endPointV[0]
-        endY = endPointV[1]
-        endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
-                'o-', ms='2', linewidth=0.5, color='orange')
-
-    def plotLinePurple(self, startPointV, endPointV):
-        startX = startPointV[0]
-        startY = startPointV[1]
-        startZ = startPointV[2]
-        endX = endPointV[0]
-        endY = endPointV[1]
-        endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
-                'o-', ms='2', linewidth=0.5, color='purple')
-
-    def plotLineBlack(self, startPointV, endPointV):
-        startX = startPointV[0]
-        startY = startPointV[1]
-        startZ = startPointV[2]
-        endX = endPointV[0]
-        endY = endPointV[1]
-        endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
-                'o-', ms='2', linewidth=0.5, color='black')
 
 # ミラーの光線追跡を行う関数
 def mirror_reflection():
-    # インスタンス生成
-    VF = VectorFunctions()
-
     # ミラー描画
     def plot_mirror(params):
         X_center = params[0][0]
@@ -387,69 +188,99 @@ def mirror_reflection():
     VF.plotLineBlack([-100,0,0], [400,0,0])  # 仮
 
     # 初期値
-    s_pos = np.array([0.0, 0.0, 0.0])
-    s_dir = np.array([1.0, 0.0, 0.0])
+    VF.ray_start_pos = np.array([0.0, 0.0, 0.0])
+    VF.ray_start_dir = np.array([1.0, 0.0, 0.0])
 
     # BS
     def BS_raytrace():
+        last_pos = []  # 仮
+        last_dir = []  # 仮
         # ----------------BS1----------------
         pos_BS1_f = BS_params[0][0]
         nV_BS1_f = BS_params[0][1]
         nV_BS1_f = nV_BS1_f / np.linalg.norm(nV_BS1_f)
-        front_pos_BS1 = s_pos + s_dir*VF.calcT_mirror(s_pos, s_dir, pos_BS1_f, nV_BS1_f)
-        front_dir_BS1 = VF.calcReflectionV(s_dir, nV_BS1_f)
-        VF.plotLineBlue(s_pos, front_pos_BS1)
 
-        glass_dir_BS1 = VF.calcRefractionV(s_dir, nV_BS1_f, N_air, N_Fused_Silica)
+        VF.raytrace_plane(pos_BS1_f, nV_BS1_f)
+        VF.reflect(nV_BS1_f)
+        VF.plotLineBlue()
+        last_pos.append(VF.ray_end_pos)  # 仮
+        last_dir.append(VF.ray_end_dir)  # 仮
+
+
+        VF.refract(nV_BS1_f, N_air, N_Fused_Silica)
         pos_BS1_b = BS_params[1][0]
         nV_BS1_b = BS_params[1][1]
         nV_BS1_b = nV_BS1_b / np.linalg.norm(nV_BS1_b)
-        back_pos_BS1 = front_pos_BS1 + glass_dir_BS1*VF.calcT_mirror(front_pos_BS1, glass_dir_BS1, pos_BS1_b, nV_BS1_b)
-        back_dir_BS1 = VF.calcRefractionV(glass_dir_BS1, nV_BS1_b, N_Fused_Silica, N_air)
-        VF.plotLineGreen(front_pos_BS1, back_pos_BS1)
+
+        VF.ray_start_pos = VF.ray_end_pos
+        VF.ray_start_dir = VF.ray_end_dir
+        VF.raytrace_plane(pos_BS1_b, nV_BS1_b)
+        VF.refract(nV_BS1_b, N_Fused_Silica, N_air)
+        VF.plotLineGreen()
 
         # ----------------BS2----------------
         pos_BS2_f = BS_params[2][0]
         nV_BS2_f = BS_params[2][1]
         nV_BS2_f = nV_BS2_f / np.linalg.norm(nV_BS2_f)
-        front_pos_BS2 = back_pos_BS1 + back_dir_BS1*VF.calcT_mirror(back_pos_BS1, back_dir_BS1, pos_BS2_f, nV_BS2_f)
-        front_dir_BS2 = VF.calcReflectionV(back_dir_BS1, nV_BS2_f)
-        VF.plotLineGreen(back_pos_BS1, front_pos_BS2)
 
-        glass_dir_BS2 = VF.calcRefractionV(back_dir_BS1, nV_BS2_f, N_air, N_Fused_Silica)
+        VF.ray_start_pos = VF.ray_end_pos
+        VF.ray_start_dir = VF.ray_end_dir
+        VF.raytrace_plane(pos_BS2_f, nV_BS2_f)
+        VF.reflect(nV_BS2_f)
+        VF.plotLineGreen()
+        last_pos.append(VF.ray_end_pos)  # 仮
+        last_dir.append(VF.ray_end_dir)  # 仮
+
+
+        VF.refract(nV_BS2_f, N_air, N_Fused_Silica)
         pos_BS2_b = BS_params[3][0]
         nV_BS2_b = BS_params[3][1]
         nV_BS2_b = nV_BS2_b / np.linalg.norm(nV_BS2_b)
-        back_pos_BS2 = front_pos_BS2 + glass_dir_BS2*VF.calcT_mirror(front_pos_BS2, glass_dir_BS2, pos_BS2_b, nV_BS2_b)
-        back_dir_BS2 = VF.calcRefractionV(glass_dir_BS2, nV_BS2_b, N_Fused_Silica, N_air)
-        VF.plotLineRed(front_pos_BS2, back_pos_BS2)
+
+        VF.ray_start_pos = VF.ray_end_pos
+        VF.ray_start_dir = VF.ray_end_dir
+        VF.raytrace_plane(pos_BS2_b, nV_BS2_b)
+        VF.refract(nV_BS2_b, N_Fused_Silica, N_air)
+        VF.plotLineRed()
 
         # ----------------BS3----------------
         pos_BS3_f = BS_params[4][0]
         nV_BS3_f = BS_params[4][1]
         nV_BS3_f = nV_BS3_f / np.linalg.norm(nV_BS3_f)
-        front_pos_BS3 = back_pos_BS2 + back_dir_BS2*VF.calcT_mirror(back_pos_BS2, back_dir_BS2, pos_BS3_f, nV_BS3_f)
-        front_dir_BS3 = VF.calcReflectionV(back_dir_BS2, nV_BS3_f)
-        VF.plotLineRed(back_pos_BS2, front_pos_BS3)
 
-        glass_dir_BS3 = VF.calcRefractionV(back_dir_BS2, nV_BS3_f, N_air, N_Fused_Silica)
+        VF.ray_start_pos = VF.ray_end_pos
+        VF.ray_start_dir = VF.ray_end_dir
+        VF.raytrace_plane(pos_BS3_f, nV_BS3_f)
+        VF.reflect(nV_BS3_f)
+        VF.plotLineRed()
+        last_pos.append(VF.ray_end_pos)  # 仮
+        last_dir.append(VF.ray_end_dir)  # 仮
+
+
+        VF.refract(nV_BS3_f, N_air, N_Fused_Silica)
         pos_BS3_b = BS_params[5][0]
         nV_BS3_b = BS_params[5][1]
         nV_BS3_b = nV_BS3_b / np.linalg.norm(nV_BS3_b)
-        back_pos_BS3 = front_pos_BS3 + glass_dir_BS3*VF.calcT_mirror(front_pos_BS3, glass_dir_BS3, pos_BS3_b, nV_BS3_b)
-        back_dir_BS3 = VF.calcRefractionV(glass_dir_BS3, nV_BS3_b, N_Fused_Silica, N_air)
-        VF.plotLineOrange(front_pos_BS3, back_pos_BS3)
+
+        VF.ray_start_pos = VF.ray_end_pos
+        VF.ray_start_dir = VF.ray_end_dir
+        VF.raytrace_plane(pos_BS3_b, nV_BS3_b)
+        VF.refract(nV_BS3_b, N_Fused_Silica, N_air)
+        VF.plotLineOrange()
 
         # ----------------BS4----------------
         pos_BS4_f = BS_params[6][0]
         nV_BS4_f = BS_params[6][1]
         nV_BS4_f = nV_BS4_f / np.linalg.norm(nV_BS4_f)
-        front_pos_BS4 = back_pos_BS3 + back_dir_BS3*VF.calcT_mirror(back_pos_BS3, back_dir_BS3, pos_BS4_f, nV_BS4_f)
-        front_dir_BS4 = VF.calcReflectionV(back_dir_BS3, nV_BS4_f)
-        VF.plotLineOrange(back_pos_BS3, front_pos_BS4)
 
-        last_pos = np.array([front_pos_BS1, front_pos_BS2, front_pos_BS3, front_pos_BS4])
-        last_dir = np.array([front_dir_BS1, front_dir_BS2, front_dir_BS3, front_dir_BS4])
+        VF.ray_start_pos = VF.ray_end_pos
+        VF.ray_start_dir = VF.ray_end_dir
+        VF.raytrace_plane(pos_BS4_f, nV_BS4_f)
+        VF.reflect(nV_BS4_f)
+        VF.plotLineOrange()
+        last_pos.append(VF.ray_end_pos)  # 仮
+        last_dir.append(VF.ray_end_dir)  # 仮
+
         return last_pos, last_dir
 
     # TTM1
@@ -462,15 +293,14 @@ def mirror_reflection():
         dir_TTM1 = []
         for i in range(4):
             nV_TTM1 = TTM1_params[i][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], TTM1_params[i][0], TTM1_params[i][1])
-            dir = VF.calcReflectionV(last_dir[i], nV_TTM1)
-            pos_TTM1.append(pos)
-            dir_TTM1.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(TTM1_params[i][0], nV_TTM1)
+            VF.reflect(nV_TTM1)
+            pos_TTM1.append(VF.ray_end_pos)
+            dir_TTM1.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_TTM1[0])
-        VF.plotLineGreen(last_pos[1], pos_TTM1[1])
-        VF.plotLineRed(last_pos[2], pos_TTM1[2])
-        VF.plotLineOrange(last_pos[3], pos_TTM1[3])
         return pos_TTM1, dir_TTM1
 
     # TTM2
@@ -483,15 +313,14 @@ def mirror_reflection():
         dir_TTM2 = []
         for i in range(4):
             nV_TTM2 = TTM2_params[i][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], TTM2_params[i][0], TTM2_params[i][1])
-            dir = VF.calcReflectionV(last_dir[i], nV_TTM2)
-            pos_TTM2.append(pos)
-            dir_TTM2.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(TTM2_params[i][0], nV_TTM2)
+            VF.reflect(nV_TTM2)
+            pos_TTM2.append(VF.ray_end_pos)
+            dir_TTM2.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_TTM2[0])
-        VF.plotLineGreen(last_pos[1], pos_TTM2[1])
-        VF.plotLineRed(last_pos[2], pos_TTM2[2])
-        VF.plotLineOrange(last_pos[3], pos_TTM2[3])
         return pos_TTM2, dir_TTM2
 
     # PRISM
@@ -504,16 +333,14 @@ def mirror_reflection():
         dir_PRISM_front = []
         for i in range(4):
             nV_PRISM_front = PRISM_front_params[i][1]
-            #print(nV_PRISM)
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], PRISM_front_params[i][0], PRISM_front_params[i][1])
-            dir = VF.calcRefractionV(last_dir[i], nV_PRISM_front, N_air, N_Fused_Silica)
-            pos_PRISM_front.append(pos)
-            dir_PRISM_front.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(PRISM_front_params[i][0], nV_PRISM_front)
+            VF.refract(nV_PRISM_front, N_air, N_Fused_Silica)
+            pos_PRISM_front.append(VF.ray_end_pos)
+            dir_PRISM_front.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_PRISM_front[0])
-        VF.plotLineGreen(last_pos[1], pos_PRISM_front[1])
-        VF.plotLineRed(last_pos[2], pos_PRISM_front[2])
-        VF.plotLineOrange(last_pos[3], pos_PRISM_front[3])
         return pos_PRISM_front, dir_PRISM_front
 
     def PRISM_back_raytrace():
@@ -525,15 +352,14 @@ def mirror_reflection():
         dir_PRISM_back = []
         for i in range(4):
             nV_PRISM_back = PRISM_back_params[i][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], PRISM_back_params[i][0], PRISM_back_params[i][1])
-            dir = VF.calcRefractionV(last_dir[i], nV_PRISM_back, N_Fused_Silica, N_air)
-            pos_PRISM_back.append(pos)
-            dir_PRISM_back.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(PRISM_back_params[i][0], nV_PRISM_back)
+            VF.refract(nV_PRISM_back, N_Fused_Silica, N_air)
+            pos_PRISM_back.append(VF.ray_end_pos)
+            dir_PRISM_back.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_PRISM_back[0])
-        VF.plotLineGreen(last_pos[1], pos_PRISM_back[1])
-        VF.plotLineRed(last_pos[2], pos_PRISM_back[2])
-        VF.plotLineOrange(last_pos[3], pos_PRISM_back[3])
         return pos_PRISM_back, dir_PRISM_back
 
     # FBM
@@ -546,15 +372,14 @@ def mirror_reflection():
         dir_FBM = []
         for i in range(4):
             nV_FBM = FBM_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], FBM_params[0][0], FBM_params[0][1])
-            dir = VF.calcReflectionV(last_dir[i], nV_FBM)
-            pos_FBM.append(pos)
-            dir_FBM.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(FBM_params[0][0], nV_FBM)
+            VF.reflect(nV_FBM)
+            pos_FBM.append(VF.ray_end_pos)
+            dir_FBM.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_FBM[0])
-        VF.plotLineGreen(last_pos[1], pos_FBM[1])
-        VF.plotLineRed(last_pos[2], pos_FBM[2])
-        VF.plotLineOrange(last_pos[3], pos_FBM[3])
         return pos_FBM, dir_FBM
 
     # skip BE entrance pupil
@@ -568,15 +393,14 @@ def mirror_reflection():
         dir_M5 = []
         for i in range(4):
             nV_M5 = M5_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], M5_params[0][0], M5_params[0][1])
-            dir = VF.calcReflectionV(last_dir[i], nV_M5)
-            pos_M5.append(pos)
-            dir_M5.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(M5_params[0][0], nV_M5)
+            VF.reflect(nV_M5)
+            pos_M5.append(VF.ray_end_pos)
+            dir_M5.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_M5[0])
-        VF.plotLineGreen(last_pos[1], pos_M5[1])
-        VF.plotLineRed(last_pos[2], pos_M5[2])
-        VF.plotLineOrange(last_pos[3], pos_M5[3])
         return pos_M5, dir_M5
 
     # DM1234
@@ -591,15 +415,13 @@ def mirror_reflection():
         dir_DM1234 = []
         for i in range(4):
             nV_DM1234 = DM1234_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], DM1234_params[0][0], nV_DM1234)
-            dir = VF.calcReflectionV(last_dir[i], nV_DM1234)
-            pos_DM1234.append(pos)
-            dir_DM1234.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_DM1234[0])
-        VF.plotLineGreen(last_pos[1], pos_DM1234[1])
-        VF.plotLineRed(last_pos[2], pos_DM1234[2])
-        VF.plotLineOrange(last_pos[3], pos_DM1234[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(DM1234_params[0][0], nV_DM1234)
+            VF.reflect(nV_DM1234)
+            pos_DM1234.append(VF.ray_end_pos)
+            dir_DM1234.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # DM2
         last_pos = pos_DM1234
@@ -608,15 +430,13 @@ def mirror_reflection():
         dir_DM1234 = []
         for i in range(4):
             nV_DM1234 = DM1234_params[1][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], DM1234_params[1][0], nV_DM1234)
-            dir = VF.calcReflectionV(last_dir[i], nV_DM1234)
-            pos_DM1234.append(pos)
-            dir_DM1234.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_DM1234[0])
-        VF.plotLineGreen(last_pos[1], pos_DM1234[1])
-        VF.plotLineRed(last_pos[2], pos_DM1234[2])
-        VF.plotLineOrange(last_pos[3], pos_DM1234[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(DM1234_params[1][0], nV_DM1234)
+            VF.reflect(nV_DM1234)
+            pos_DM1234.append(VF.ray_end_pos)
+            dir_DM1234.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # DM3
         last_pos = pos_DM1234
@@ -625,15 +445,13 @@ def mirror_reflection():
         dir_DM1234 = []
         for i in range(4):
             nV_DM1234 = DM1234_params[2][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], DM1234_params[2][0], nV_DM1234)
-            dir = VF.calcReflectionV(last_dir[i], nV_DM1234)
-            pos_DM1234.append(pos)
-            dir_DM1234.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_DM1234[0])
-        VF.plotLineGreen(last_pos[1], pos_DM1234[1])
-        VF.plotLineRed(last_pos[2], pos_DM1234[2])
-        VF.plotLineOrange(last_pos[3], pos_DM1234[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(DM1234_params[2][0], nV_DM1234)
+            VF.reflect(nV_DM1234)
+            pos_DM1234.append(VF.ray_end_pos)
+            dir_DM1234.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # DM4
         last_pos = pos_DM1234
@@ -642,15 +460,13 @@ def mirror_reflection():
         dir_DM1234 = []
         for i in range(4):
             nV_DM1234 = DM1234_params[3][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], DM1234_params[3][0], nV_DM1234)
-            dir = VF.calcReflectionV(last_dir[i], nV_DM1234)
-            pos_DM1234.append(pos)
-            dir_DM1234.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_DM1234[0])
-        VF.plotLineGreen(last_pos[1], pos_DM1234[1])
-        VF.plotLineRed(last_pos[2], pos_DM1234[2])
-        VF.plotLineOrange(last_pos[3], pos_DM1234[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(DM1234_params[3][0], nV_DM1234)
+            VF.reflect(nV_DM1234)
+            pos_DM1234.append(VF.ray_end_pos)
+            dir_DM1234.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_DM1234, dir_DM1234
 
@@ -666,15 +482,13 @@ def mirror_reflection():
         dir_IMR = []
         for i in range(4):
             nV_IMR = np.array([-np.sin(IMR_rot_deg*np.pi/180)*(1/np.sqrt(2)), np.cos(IMR_rot_deg*np.pi/180)*(1/np.sqrt(2)), -1/np.sqrt(2)])
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], IMR_params[0][0], nV_IMR)
-            dir = VF.calcRefractionV(last_dir[i], nV_IMR, N_air, N_Fused_Silica)
-            pos_IMR.append(pos)
-            dir_IMR.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_IMR[0])
-        VF.plotLineGreen(last_pos[1], pos_IMR[1])
-        VF.plotLineRed(last_pos[2], pos_IMR[2])
-        VF.plotLineOrange(last_pos[3], pos_IMR[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(IMR_params[0][0], nV_IMR)
+            VF.refract(nV_IMR, N_air, N_Fused_Silica)
+            pos_IMR.append(VF.ray_end_pos)
+            dir_IMR.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # IMR-Mid
         last_pos = pos_IMR
@@ -683,15 +497,13 @@ def mirror_reflection():
         dir_IMR = []
         for i in range(4):
             nV_IMR = IMR_params[1][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], IMR_params[1][0], nV_IMR)
-            dir = VF.calcReflectionV(last_dir[i], nV_IMR)
-            pos_IMR.append(pos)
-            dir_IMR.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_IMR[0])
-        VF.plotLineGreen(last_pos[1], pos_IMR[1])
-        VF.plotLineRed(last_pos[2], pos_IMR[2])
-        VF.plotLineOrange(last_pos[3], pos_IMR[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(IMR_params[1][0], nV_IMR)
+            VF.reflect(nV_IMR)
+            pos_IMR.append(VF.ray_end_pos)
+            dir_IMR.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # IMR-Back
         last_pos = pos_IMR
@@ -700,15 +512,13 @@ def mirror_reflection():
         dir_IMR = []
         for i in range(4):
             nV_IMR = IMR_params[2][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], IMR_params[2][0], nV_IMR)
-            dir = VF.calcRefractionV(last_dir[i], nV_IMR, N_Fused_Silica, N_air)
-            pos_IMR.append(pos)
-            dir_IMR.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_IMR[0])
-        VF.plotLineGreen(last_pos[1], pos_IMR[1])
-        VF.plotLineRed(last_pos[2], pos_IMR[2])
-        VF.plotLineOrange(last_pos[3], pos_IMR[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(IMR_params[2][0], nV_IMR)
+            VF.refract(nV_IMR, N_Fused_Silica, N_air)
+            pos_IMR.append(VF.ray_end_pos)
+            dir_IMR.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_IMR, dir_IMR
 
@@ -724,15 +534,13 @@ def mirror_reflection():
         dir_DM56 = []
         for i in range(4):
             nV_DM56 = DM56_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], DM56_params[0][0], nV_DM56)
-            dir = VF.calcReflectionV(last_dir[i], nV_DM56)
-            pos_DM56.append(pos)
-            dir_DM56.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_DM56[0])
-        VF.plotLineGreen(last_pos[1], pos_DM56[1])
-        VF.plotLineRed(last_pos[2], pos_DM56[2])
-        VF.plotLineOrange(last_pos[3], pos_DM56[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(DM56_params[0][0], nV_DM56)
+            VF.reflect(nV_DM56)
+            pos_DM56.append(VF.ray_end_pos)
+            dir_DM56.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # DM6
         last_pos = pos_DM56
@@ -741,15 +549,13 @@ def mirror_reflection():
         dir_DM56 = []
         for i in range(4):
             nV_DM56 = DM56_params[1][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], DM56_params[1][0], nV_DM56)
-            dir = VF.calcReflectionV(last_dir[i], nV_DM56)
-            pos_DM56.append(pos)
-            dir_DM56.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_DM56[0])
-        VF.plotLineGreen(last_pos[1], pos_DM56[1])
-        VF.plotLineRed(last_pos[2], pos_DM56[2])
-        VF.plotLineOrange(last_pos[3], pos_DM56[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(DM56_params[1][0], nV_DM56)
+            VF.reflect(nV_DM56)
+            pos_DM56.append(VF.ray_end_pos)
+            dir_DM56.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_DM56, dir_DM56
 
@@ -762,111 +568,105 @@ def mirror_reflection():
         last_dir = DM56_params[1]
         pos_BE_G123 = []
         dir_BE_G123 = []
+        lens_R_G1f = BE_G123_params[0][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_sphere(last_pos[i], last_dir[i], BE_G123_params[0][0], BE_G123_params[0][3])
-            nV_BE_G123 = pos + np.array([0, 0, BE_G123_params[0][3]]) - BE_G123_params[0][0]
-            dir = VF.calcRefractionV(last_dir[i], -nV_BE_G123, N_air, N_Fused_Silica)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_sphere(BE_G123_params[0][0], lens_R_G1f)
+            nV_BE_G123 = VF.ray_end_pos + np.array([0, 0, lens_R_G1f]) - BE_G123_params[0][0]
+            VF.refract(-nV_BE_G123, N_air, N_Fused_Silica)
             #ax.quiver(pos[0], pos[1], pos[2], nV_BE_G123[0], nV_BE_G123[1], nV_BE_G123[2], color='blue', length=0.1)
             #ax.quiver(pos[0], pos[1], pos[2], -nV_BE_G123[0], -nV_BE_G123[1], -nV_BE_G123[2], color='blue', length=0.1)
-            pos_BE_G123.append(pos)
-            dir_BE_G123.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_BE_G123[0])
-        VF.plotLineGreen(last_pos[1], pos_BE_G123[1])
-        VF.plotLineRed(last_pos[2], pos_BE_G123[2])
-        VF.plotLineOrange(last_pos[3], pos_BE_G123[3])
+            pos_BE_G123.append(VF.ray_end_pos)
+            dir_BE_G123.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         last_pos = pos_BE_G123
         last_dir = dir_BE_G123
         pos_BE_G123 = []
         dir_BE_G123 = []
+        lens_R_G1b = BE_G123_params[1][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_sphere(last_pos[i], last_dir[i], BE_G123_params[1][0], BE_G123_params[1][3])
-            nV_BE_G123 = pos + np.array([0, 0, BE_G123_params[1][3]]) - BE_G123_params[1][0]
-            dir = VF.calcRefractionV(last_dir[i], nV_BE_G123, N_Fused_Silica, N_air)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_sphere(BE_G123_params[1][0], lens_R_G1b)
+            nV_BE_G123 = VF.ray_end_pos + np.array([0, 0, lens_R_G1b]) - BE_G123_params[1][0]
+            VF.refract(nV_BE_G123, N_Fused_Silica, N_air)
             #ax.quiver(pos[0], pos[1], pos[2], nV_BE_G123[0], nV_BE_G123[1], nV_BE_G123[2], color='blue', length=0.1)
             #ax.quiver(pos[0], pos[1], pos[2], -nV_BE_G123[0], -nV_BE_G123[1], -nV_BE_G123[2], color='blue', length=0.1)
-            pos_BE_G123.append(pos)
-            dir_BE_G123.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_BE_G123[0])
-        VF.plotLineGreen(last_pos[1], pos_BE_G123[1])
-        VF.plotLineRed(last_pos[2], pos_BE_G123[2])
-        VF.plotLineOrange(last_pos[3], pos_BE_G123[3])
+            pos_BE_G123.append(VF.ray_end_pos)
+            dir_BE_G123.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # BE_G2
         last_pos = pos_BE_G123
         last_dir = dir_BE_G123
         pos_BE_G123 = []
         dir_BE_G123 = []
+        lens_R_G2f = BE_G123_params[2][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_sphere(last_pos[i], last_dir[i], BE_G123_params[2][0], BE_G123_params[2][3])
-            nV_BE_G123 = pos + np.array([0, 0, BE_G123_params[2][3]]) - BE_G123_params[2][0]
-            dir = VF.calcRefractionV(last_dir[i], -nV_BE_G123, N_air, N_Fused_Silica)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_sphere(BE_G123_params[2][0], lens_R_G2f)
+            nV_BE_G123 = VF.ray_end_pos + np.array([0, 0, lens_R_G2f]) - BE_G123_params[2][0]
+            VF.refract(-nV_BE_G123, N_air, N_Fused_Silica)
             #ax.quiver(pos[0], pos[1], pos[2], nV_BE_G123[0], nV_BE_G123[1], nV_BE_G123[2], color='blue', length=0.1)
             #ax.quiver(pos[0], pos[1], pos[2], -nV_BE_G123[0], -nV_BE_G123[1], -nV_BE_G123[2], color='blue', length=0.1)
-            pos_BE_G123.append(pos)
-            dir_BE_G123.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_BE_G123[0])
-        VF.plotLineGreen(last_pos[1], pos_BE_G123[1])
-        VF.plotLineRed(last_pos[2], pos_BE_G123[2])
-        VF.plotLineOrange(last_pos[3], pos_BE_G123[3])
+            pos_BE_G123.append(VF.ray_end_pos)
+            dir_BE_G123.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         last_pos = pos_BE_G123
         last_dir = dir_BE_G123
         pos_BE_G123 = []
         dir_BE_G123 = []
+        lens_R_G2b = BE_G123_params[3][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_sphere(last_pos[i], last_dir[i], BE_G123_params[3][0], BE_G123_params[3][3])
-            nV_BE_G123 = pos + np.array([0, 0, BE_G123_params[3][3]]) - BE_G123_params[3][0]
-            dir = VF.calcRefractionV(last_dir[i], -nV_BE_G123, N_Fused_Silica, N_air)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_sphere(BE_G123_params[3][0], lens_R_G2b)
+            nV_BE_G123 = VF.ray_end_pos + np.array([0, 0, lens_R_G2b]) - BE_G123_params[3][0]
+            VF.refract(-nV_BE_G123, N_Fused_Silica, N_air)
             #ax.quiver(pos[0], pos[1], pos[2], nV_BE_G123[0], nV_BE_G123[1], nV_BE_G123[2], color='blue', length=0.1)
             #ax.quiver(pos[0], pos[1], pos[2], -nV_BE_G123[0], -nV_BE_G123[1], -nV_BE_G123[2], color='blue', length=0.1)
-            pos_BE_G123.append(pos)
-            dir_BE_G123.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_BE_G123[0])
-        VF.plotLineGreen(last_pos[1], pos_BE_G123[1])
-        VF.plotLineRed(last_pos[2], pos_BE_G123[2])
-        VF.plotLineOrange(last_pos[3], pos_BE_G123[3])
+            pos_BE_G123.append(VF.ray_end_pos)
+            dir_BE_G123.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # BE_G3
         last_pos = pos_BE_G123
         last_dir = dir_BE_G123
         pos_BE_G123 = []
         dir_BE_G123 = []
+        lens_R_G3f = BE_G123_params[4][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_sphere(last_pos[i], last_dir[i], BE_G123_params[4][0], BE_G123_params[4][3])
-            nV_BE_G123 = pos + np.array([0, 0, BE_G123_params[4][3]]) - BE_G123_params[4][0]
-            dir = VF.calcRefractionV(last_dir[i], -nV_BE_G123, N_air, N_Fused_Silica)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_sphere(BE_G123_params[4][0], lens_R_G3f)
+            nV_BE_G123 = VF.ray_end_pos + np.array([0, 0, lens_R_G3f]) - BE_G123_params[4][0]
+            VF.refract(-nV_BE_G123, N_air, N_Fused_Silica)
             #ax.quiver(pos[0], pos[1], pos[2], nV_BE_G123[0], nV_BE_G123[1], nV_BE_G123[2], color='blue', length=0.1)
             #ax.quiver(pos[0], pos[1], pos[2], -nV_BE_G123[0], -nV_BE_G123[1], -nV_BE_G123[2], color='blue', length=0.1)
-            pos_BE_G123.append(pos)
-            dir_BE_G123.append(dir)
-        
-        VF.plotLineBlue(last_pos[0], pos_BE_G123[0])
-        VF.plotLineGreen(last_pos[1], pos_BE_G123[1])
-        VF.plotLineRed(last_pos[2], pos_BE_G123[2])
-        VF.plotLineOrange(last_pos[3], pos_BE_G123[3])
+            pos_BE_G123.append(VF.ray_end_pos)
+            dir_BE_G123.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         last_pos = pos_BE_G123
         last_dir = dir_BE_G123
         pos_BE_G123 = []
         dir_BE_G123 = []
+        lens_R_G3b = BE_G123_params[5][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_sphere(last_pos[i], last_dir[i], BE_G123_params[5][0], BE_G123_params[5][3])
-            nV_BE_G123 = pos + np.array([0, 0, BE_G123_params[5][3]]) - BE_G123_params[5][0]
-            dir = VF.calcRefractionV(last_dir[i], -nV_BE_G123, N_Fused_Silica, N_air)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_sphere(BE_G123_params[5][0], lens_R_G3b)
+            nV_BE_G123 = VF.ray_end_pos + np.array([0, 0, lens_R_G3b]) - BE_G123_params[5][0]
+            VF.refract(-nV_BE_G123, N_Fused_Silica, N_air)
             #ax.quiver(pos[0], pos[1], pos[2], nV_BE_G123[0], nV_BE_G123[1], nV_BE_G123[2], color='blue', length=0.1)
             #ax.quiver(pos[0], pos[1], pos[2], -nV_BE_G123[0], -nV_BE_G123[1], -nV_BE_G123[2], color='blue', length=0.1)
-            pos_BE_G123.append(pos)
-            dir_BE_G123.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_BE_G123[0])
-        VF.plotLineGreen(last_pos[1], pos_BE_G123[1])
-        VF.plotLineRed(last_pos[2], pos_BE_G123[2])
-        VF.plotLineOrange(last_pos[3], pos_BE_G123[3])
+            pos_BE_G123.append(VF.ray_end_pos)
+            dir_BE_G123.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_BE_G123, dir_BE_G123
 
@@ -881,15 +681,13 @@ def mirror_reflection():
         dir_M678 = []
         for i in range(4):
             nV_M678 = M678_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], M678_params[0][0], nV_M678)
-            dir = VF.calcReflectionV(last_dir[i], nV_M678)
-            pos_M678.append(pos)
-            dir_M678.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_M678[0])
-        VF.plotLineGreen(last_pos[1], pos_M678[1])
-        VF.plotLineRed(last_pos[2], pos_M678[2])
-        VF.plotLineOrange(last_pos[3], pos_M678[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(M678_params[0][0], nV_M678)
+            VF.reflect(nV_M678)
+            pos_M678.append(VF.ray_end_pos)
+            dir_M678.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # M7
         last_pos = pos_M678
@@ -898,15 +696,13 @@ def mirror_reflection():
         dir_M678 = []
         for i in range(4):
             nV_M678 = M678_params[1][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], M678_params[1][0], nV_M678)
-            dir = VF.calcReflectionV(last_dir[i], nV_M678)
-            pos_M678.append(pos)
-            dir_M678.append(dir)
-        
-        VF.plotLineBlue(last_pos[0], pos_M678[0])
-        VF.plotLineGreen(last_pos[1], pos_M678[1])
-        VF.plotLineRed(last_pos[2], pos_M678[2])
-        VF.plotLineOrange(last_pos[3], pos_M678[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(M678_params[1][0], nV_M678)
+            VF.reflect(nV_M678)
+            pos_M678.append(VF.ray_end_pos)
+            dir_M678.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # M8
         last_pos = pos_M678
@@ -915,15 +711,13 @@ def mirror_reflection():
         dir_M678 = []
         for i in range(4):
             nV_M678 = M678_params[2][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], M678_params[2][0], nV_M678)
-            dir = VF.calcReflectionV(last_dir[i], nV_M678)
-            pos_M678.append(pos)
-            dir_M678.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_M678[0])
-        VF.plotLineGreen(last_pos[1], pos_M678[1])
-        VF.plotLineRed(last_pos[2], pos_M678[2])
-        VF.plotLineOrange(last_pos[3], pos_M678[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(M678_params[2][0], nV_M678)
+            VF.reflect(nV_M678)
+            pos_M678.append(VF.ray_end_pos)
+            dir_M678.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_M678, dir_M678
 
@@ -937,15 +731,13 @@ def mirror_reflection():
         dir_LLT_Window = []
         for i in range(4):
             nV_LLT_Window = LLT_Window_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], LLT_Window_params[0][0], nV_LLT_Window)
-            dir = VF.calcRefractionV(last_dir[i], nV_LLT_Window, N_air, N_BSL7)
-            pos_LLT_Window.append(pos)
-            dir_LLT_Window.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_LLT_Window[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_Window[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_Window[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_Window[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(LLT_Window_params[0][0], nV_LLT_Window)
+            VF.refract(nV_LLT_Window, N_air, N_BSL7)
+            pos_LLT_Window.append(VF.ray_end_pos)
+            dir_LLT_Window.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         last_pos = pos_LLT_Window
         last_dir = dir_LLT_Window
@@ -953,15 +745,13 @@ def mirror_reflection():
         dir_LLT_Window = []
         for i in range(4):
             nV_LLT_Window = LLT_Window_params[1][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], LLT_Window_params[1][0], nV_LLT_Window)
-            dir = VF.calcRefractionV(last_dir[i], nV_LLT_Window, N_BSL7, N_air)
-            pos_LLT_Window.append(pos)
-            dir_LLT_Window.append(dir)
-        
-        VF.plotLineBlue(last_pos[0], pos_LLT_Window[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_Window[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_Window[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_Window[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(LLT_Window_params[1][0], nV_LLT_Window)
+            VF.refract(nV_LLT_Window, N_BSL7, N_air)
+            pos_LLT_Window.append(VF.ray_end_pos)
+            dir_LLT_Window.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_LLT_Window, dir_LLT_Window
 
@@ -976,51 +766,47 @@ def mirror_reflection():
         dir_LLT_M321 = []
         for i in range(4):
             nV_LLT_M321 = LLT_M321_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], LLT_M321_params[0][0], nV_LLT_M321)
-            dir = VF.calcReflectionV(last_dir[i], nV_LLT_M321)
-            pos_LLT_M321.append(pos)
-            dir_LLT_M321.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_LLT_M321[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_M321[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_M321[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_M321[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(LLT_M321_params[0][0], nV_LLT_M321)
+            VF.reflect(nV_LLT_M321)
+            pos_LLT_M321.append(VF.ray_end_pos)
+            dir_LLT_M321.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # LLT_M2
         last_pos = pos_LLT_M321
         last_dir = dir_LLT_M321
         pos_LLT_M321 = []
         dir_LLT_M321 = []
+        parabola_R_LLT_M2 = LLT_M321_params[1][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_parabola(last_pos[i], last_dir[i], LLT_M321_params[1][0], LLT_M321_params[1][3])
-            nV_LLT_M321 = VF.calcNormal_parabola(pos, LLT_M321_params[1][0], LLT_M321_params[1][3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_parabola(LLT_M321_params[1][0], parabola_R_LLT_M2)
+            nV_LLT_M321 = VF.calcNormal_parabola(LLT_M321_params[1][0], parabola_R_LLT_M2)
             #ax.quiver(pos[0], pos[1], pos[2], nV_LLT_M321[0], nV_LLT_M321[1], nV_LLT_M321[2], color='r', length=10)
-            dir = VF.calcReflectionV(last_dir[i], nV_LLT_M321)
-            pos_LLT_M321.append(pos)
-            dir_LLT_M321.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_LLT_M321[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_M321[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_M321[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_M321[3])
+            VF.reflect(nV_LLT_M321)
+            pos_LLT_M321.append(VF.ray_end_pos)
+            dir_LLT_M321.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         # LLT_M1
         last_pos = pos_LLT_M321
         last_dir = dir_LLT_M321
         pos_LLT_M321 = []
         dir_LLT_M321 = []
+        parabola_R_LLT_M1 = LLT_M321_params[2][3]
         for i in range(4):
-            pos = last_pos[i] + last_dir[i]*VF.calcT_parabola(last_pos[i], last_dir[i], LLT_M321_params[2][0], LLT_M321_params[2][3])
-            nV_LLT_M321 = VF.calcNormal_parabola(pos, LLT_M321_params[2][0], LLT_M321_params[2][3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_parabola(LLT_M321_params[2][0], parabola_R_LLT_M1)
+            nV_LLT_M321 = VF.calcNormal_parabola(LLT_M321_params[2][0], parabola_R_LLT_M1)
             #ax.quiver(pos[0], pos[1], pos[2], nV_LLT_M321[0], nV_LLT_M321[1], nV_LLT_M321[2], color='r', length=10)
-            dir = VF.calcReflectionV(last_dir[i], nV_LLT_M321)
-            pos_LLT_M321.append(pos)
-            dir_LLT_M321.append(dir)
-        
-        VF.plotLineBlue(last_pos[0], pos_LLT_M321[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_M321[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_M321[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_M321[3])
+            VF.reflect(nV_LLT_M321)
+            pos_LLT_M321.append(VF.ray_end_pos)
+            dir_LLT_M321.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_LLT_M321, dir_LLT_M321
 
@@ -1035,15 +821,13 @@ def mirror_reflection():
         dir_LLT_Exit_Window = []
         for i in range(4):
             nV_LLT_Exit_Window = LLT_Exit_Window_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], LLT_Exit_Window_params[0][0], nV_LLT_Exit_Window)
-            dir = VF.calcRefractionV(last_dir[i], nV_LLT_Exit_Window, N_air, N_BSL7)
-            pos_LLT_Exit_Window.append(pos)
-            dir_LLT_Exit_Window.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_LLT_Exit_Window[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_Exit_Window[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_Exit_Window[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_Exit_Window[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(LLT_Exit_Window_params[0][0], nV_LLT_Exit_Window)
+            VF.refract(nV_LLT_Exit_Window, N_air, N_BSL7)
+            pos_LLT_Exit_Window.append(VF.ray_end_pos)
+            dir_LLT_Exit_Window.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         last_pos = pos_LLT_Exit_Window
         last_dir = dir_LLT_Exit_Window
@@ -1051,15 +835,13 @@ def mirror_reflection():
         dir_LLT_Exit_Window = []
         for i in range(4):
             nV_LLT_Exit_Window = LLT_Exit_Window_params[1][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], LLT_Exit_Window_params[1][0], nV_LLT_Exit_Window)
-            dir = VF.calcRefractionV(last_dir[i], nV_LLT_Exit_Window, N_BSL7, N_air)
-            pos_LLT_Exit_Window.append(pos)
-            dir_LLT_Exit_Window.append(dir)
-
-        VF.plotLineBlue(last_pos[0], pos_LLT_Exit_Window[0])
-        VF.plotLineGreen(last_pos[1], pos_LLT_Exit_Window[1])
-        VF.plotLineRed(last_pos[2], pos_LLT_Exit_Window[2])
-        VF.plotLineOrange(last_pos[3], pos_LLT_Exit_Window[3])
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(LLT_Exit_Window_params[1][0], nV_LLT_Exit_Window)
+            VF.refract(nV_LLT_Exit_Window, N_BSL7, N_air)
+            pos_LLT_Exit_Window.append(VF.ray_end_pos)
+            dir_LLT_Exit_Window.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
         return pos_LLT_Exit_Window, dir_LLT_Exit_Window
 
@@ -1074,15 +856,14 @@ def mirror_reflection():
         dir_Evaluation_Plane = []
         for i in range(4):
             nV_Evaluation_Plane = Evaluation_Plane_params[0][1]
-            pos = last_pos[i] + last_dir[i]*VF.calcT_mirror(last_pos[i], last_dir[i], Evaluation_Plane_params[0][0], nV_Evaluation_Plane)
-            dir = last_dir[i]
-            pos_Evaluation_Plane.append(pos)
-            dir_Evaluation_Plane.append(dir)
+            VF.ray_start_pos = last_pos[i]
+            VF.ray_start_dir = last_dir[i]
+            VF.raytrace_plane(Evaluation_Plane_params[0][0], nV_Evaluation_Plane)
+            VF.ray_end_dir = VF.ray_start_dir
+            pos_Evaluation_Plane.append(VF.ray_end_pos)
+            dir_Evaluation_Plane.append(VF.ray_end_dir)
+            VF.plotFourBeamLine(i)
 
-        VF.plotLineBlue(last_pos[0], pos_Evaluation_Plane[0])
-        VF.plotLineGreen(last_pos[1], pos_Evaluation_Plane[1])
-        VF.plotLineRed(last_pos[2], pos_Evaluation_Plane[2])
-        VF.plotLineOrange(last_pos[3], pos_Evaluation_Plane[3])
 
         rad_list = []
         for i in range(4):
@@ -1114,15 +895,14 @@ def mirror_reflection():
     end_pos = []
     end_dir = []
     for i in range(4):
-        pos = last_pos[i] + last_dir[i]*2000
-        dir = last_dir[i]
-        end_pos.append(pos)
-        end_dir.append(dir)
+        VF.ray_start_pos = last_pos[i]
+        VF.ray_start_dir = last_dir[i]
+        VF.ray_end_pos = last_pos[i] + last_dir[i]*2000
+        VF.ray_end_dir = last_dir[i]
+        end_pos.append(VF.ray_end_pos)
+        end_dir.append(VF.ray_end_dir)
+        VF.plotFourBeamLine(i)
 
-    VF.plotLineBlue(last_pos[0], end_pos[0])
-    VF.plotLineGreen(last_pos[1], end_pos[1])
-    VF.plotLineRed(last_pos[2], end_pos[2])
-    VF.plotLineOrange(last_pos[3], end_pos[3])
     VF.plotLineBlack([60.000, -250.400, -370.000], [60.000, 2000, -370.000])
 
     #print(Evaluation_Plane_params[0][0], "evaluation Plane")
@@ -1133,16 +913,16 @@ def mirror_reflection():
     #print(last_dir, "last_dir")
 
     # 描画範囲
-    LX = 50
-    LY = 50
-    LZ = 50
-    ax.set_xlim(-LX+125, LX+125)
+    LX = 300
+    LY = 300
+    LZ = 300
+    ax.set_xlim(-LX+60, LX+60)
     ax.set_ylim(-LY+0, LY+0)
-    ax.set_zlim(-LZ-0, LZ-0)
+    ax.set_zlim(-LZ-370, LZ-370)
     ax.set_xlabel('x [mm]')
     ax.set_ylabel('y [mm]')
     ax.set_zlabel('z [mm]')
-    ax.view_init(elev=24, azim=-28)
+    ax.view_init(elev=24, azim=45)
 
 
 
@@ -1152,9 +932,14 @@ if __name__ == "__main__":
 
     ax = fig.add_subplot(1, 1, 1, projection='3d')
     ax.aspect = 'equal'
+
+    # インスタンス生成
+    VF = VectorFunctions()
+    VF.ax = ax
+
     mirror_reflection()
 
     print('\ntime =', round(time.time()-start, 5), 'sec')
     print('\n----------------END----------------\n')
-    plt.savefig("step3_view_system_%darcsec.png" % target_arcsec)
+    #plt.savefig("view_system_%darcsec.png" % target_arcsec, dpi=350)
     plt.show()
