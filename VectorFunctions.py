@@ -2,9 +2,12 @@ import numpy as np
 
 # 反射を計算する class
 class VectorFunctions:
-    # next
     def __init__(self):
         self.ax = None  # plotline関数のため
+        self.ray_start_pos = np.array([0, 0, 0])  # 光線の始点
+        self.ray_start_dir = np.array([1, 0, 0])  # 光線の方向ベクトル
+        self.ray_end_pos = np.array([0, 0, 0])  # 光線の終点
+        self.ray_end_dir = np.array([0, 0, 0])  # 光線の方向ベクトル
 
     # 受け取ったx,y,z座標から(x,y,z)の組を作る関数
     def makePoints(self, point0, point1, point2, shape0, shape1):
@@ -16,37 +19,39 @@ class VectorFunctions:
         result = result.reshape(shape0, shape1)
         return result
 
-    # レイトレーシング平板との交点を持つときの係数Tを計算する関数
-    def calcT_plane(self, ray_pos, ray_dir, centerV, normalV):
-        nV = np.array(normalV)/np.linalg.norm(normalV)
-        T = (np.dot(centerV, nV)-np.dot(ray_pos, nV)) / (np.dot(ray_dir, nV))
-        return T
 
-    # レイトレーシング球面との交点を持つときの係数Tを計算する関数
-    def calcT_sphere(self, ray_pos, ray_dir, lens_pos, lens_R):
+    # 平板のレイトレーシング
+    def raytrace_plane(self, centerV, normalV):
+        nV = np.array(normalV)/np.linalg.norm(normalV)
+        T = (np.dot(centerV, nV)-np.dot(self.ray_start_pos, nV)) / (np.dot(self.ray_start_dir, nV))
+        self.ray_end_pos = self.ray_start_pos + T*self.ray_start_dir
+
+    # 球面のレイトレーシング
+    def raytrace_sphere(self, lens_pos, lens_R):
         if lens_R < 0:
             shiftV = lens_pos - np.array([0, 0, lens_R])
-            ray_pos = ray_pos - shiftV
-            A = np.dot(ray_dir, ray_dir)
-            B = np.dot(ray_dir, ray_pos)
+            ray_pos = self.ray_start_pos - shiftV
+            A = np.dot(self.ray_start_dir, self.ray_start_dir)
+            B = np.dot(self.ray_start_dir, ray_pos)
             C = np.dot(ray_pos, ray_pos) - abs(lens_R)**2
             T = (-B + np.sqrt(B**2 - A*C)) / A
         elif lens_R > 0:
             shiftV = lens_pos - np.array([0, 0, lens_R])
-            ray_pos = ray_pos - shiftV
-            A = np.dot(ray_dir, ray_dir)
-            B = np.dot(ray_dir, ray_pos)
+            ray_pos = self.ray_start_pos - shiftV
+            A = np.dot(self.ray_start_dir, self.ray_start_dir)
+            B = np.dot(self.ray_start_dir, ray_pos)
             C = np.dot(ray_pos, ray_pos) - abs(lens_R)**2
             T = (-B - np.sqrt(B**2 - A*C)) / A
-        return T
+        self.ray_end_pos = self.ray_start_pos + T*self.ray_start_dir
 
-    # レイトレーシング放物線との交点を持つときの係数Tを計算する関数
-    def calcT_parabola(self, ray_pos, ray_dir, parabola_pos, parabola_R):
-        ray_pos = ray_pos - parabola_pos
+    # 放物線のレイトレーシング
+    def raytrace_parabola(self, parabola_pos, parabola_R):
+        ray_pos = self.ray_start_pos - parabola_pos
+        ray_dir = self.ray_start_dir
         if ray_dir[0]==0 and ray_dir[2]==0:
             a = 1/(2*parabola_R)
             T = a*(ray_pos[0]**2 - ray_pos[1]/a + ray_pos[0]**2) / ray_dir[1]
-            return T
+            self.ray_end_pos = self.ray_start_pos + T*self.ray_start_dir
         else:
             if parabola_R<0:
                 a = -1/(2*parabola_R)
@@ -54,18 +59,19 @@ class VectorFunctions:
                 B = ray_pos[0]*ray_dir[0] + ray_pos[2]*ray_dir[2] - ray_dir[1]/(2*a)
                 C = ray_pos[0]**2 + ray_pos[2]**2 - ray_pos[1]/a
                 T = (-B - np.sqrt(B**2 - A*C)) / A
-                return T
+                self.ray_end_pos = self.ray_start_pos + T*self.ray_start_dir
             else:
                 a = 1/(2*parabola_R)
                 A = ray_dir[0]**2 + ray_dir[2]**2
                 B = ray_pos[0]*ray_dir[0] + ray_pos[2]*ray_dir[2] - ray_dir[1]/(2*a)
                 C = ray_pos[0]**2 + ray_pos[2]**2 - ray_pos[1]/a
                 T = (-B + np.sqrt(B**2 - A*C)) / A
-                return T
+                self.ray_end_pos = self.ray_start_pos + T*self.ray_start_dir
 
     # 放物線の法線ベクトルを計算する関数
-    def calcNormal_parabola(self, ray_pos, parabola_pos, parabola_R):
+    def calcNormal_parabola(self, parabola_pos, parabola_R):
         a = abs(1/(2*parabola_R))
+        ray_pos = self.ray_end_pos
         normalVx = 2*a*(ray_pos[0] - parabola_pos[0])
         normalVy = -1
         normalVz = 2*a*(ray_pos[2] - parabola_pos[2])
@@ -73,22 +79,22 @@ class VectorFunctions:
         normalV = normalV/np.linalg.norm(normalV)
         return normalV
 
-    # 反射後の方向ベクトルを計算する関数
-    def calcReflectionV(self, ray_dir, normalV):
-        ray_dir = np.array(ray_dir)/np.linalg.norm(ray_dir)
+    # 反射計算
+    def reflect(self, normalV):
+        ray_dir = np.array(self.ray_start_dir)/np.linalg.norm(self.ray_start_dir)
         normalV = np.array(normalV)/np.linalg.norm(normalV)
         outRayV = ray_dir - 2*(np.dot(ray_dir, normalV))*normalV
         # 正規化
         outRayV = outRayV/np.linalg.norm(outRayV)
-        return outRayV
+        self.ray_end_dir = outRayV
 
-    # スネルの法則から方向ベクトルを求める関数
-    def calcRefractionV(self, ray_dir, normalV, Nin, Nout):
-        if np.dot(ray_dir, normalV) <= 0:
+    # スネルの法則
+    def refract(self, normalV, Nin, Nout):
+        # 正規化
+        ray_dir = self.ray_start_dir/np.linalg.norm(self.ray_start_dir)
+        normalV = normalV/np.linalg.norm(normalV)
+        if np.dot(self.ray_start_dir, normalV) <= 0:
             #print("内積が負です")
-            # 正規化
-            ray_dir = ray_dir/np.linalg.norm(ray_dir)
-            normalV = normalV/np.linalg.norm(normalV)
             # 係数A
             A = Nin/Nout
             # 入射角
@@ -113,10 +119,6 @@ class VectorFunctions:
             outRayV = outRayV/np.linalg.norm(outRayV)
         else:
             #print("内積が正です")
-            # スネルの法則から屈折光の方向ベクトルを求める関数(右に凸の場合)
-            # 正規化
-            ray_dir = ray_dir/np.linalg.norm(ray_dir)
-            normalV = normalV/np.linalg.norm(normalV)
             # 係数A
             A = Nin/Nout
             # 入射角
@@ -139,65 +141,86 @@ class VectorFunctions:
             outRayV = A*ray_dir + B*normalV
             # 正規化
             outRayV = outRayV/np.linalg.norm(outRayV)
-        return outRayV
+        self.ray_end_dir = outRayV
+
 
     # ２点の位置ベクトルから直線を引く関数
-    def plotLineBlue(self, ax, startPointV, endPointV):
+    def plotLineBlue(self):
+        startPointV = self.ray_start_pos
+        endPointV = self.ray_end_pos
         startX = startPointV[0]
         startY = startPointV[1]
         startZ = startPointV[2]
         endX = endPointV[0]
         endY = endPointV[1]
         endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
+        self.ax.plot([startX, endX], [startY, endY], [startZ, endZ],
                 'o-', ms='2', linewidth=0.5, color='blue')
 
-    def plotLineGreen(self, ax, startPointV, endPointV):
+    def plotLineGreen(self):
+        startPointV = self.ray_start_pos
+        endPointV = self.ray_end_pos
         startX = startPointV[0]
         startY = startPointV[1]
         startZ = startPointV[2]
         endX = endPointV[0]
         endY = endPointV[1]
         endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
+        self.ax.plot([startX, endX], [startY, endY], [startZ, endZ],
                 'o-', ms='2', linewidth=0.5, color='green')
 
-    def plotLineRed(self, ax, startPointV, endPointV):
+    def plotLineRed(self):
+        startPointV = self.ray_start_pos
+        endPointV = self.ray_end_pos
         startX = startPointV[0]
         startY = startPointV[1]
         startZ = startPointV[2]
         endX = endPointV[0]
         endY = endPointV[1]
         endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
+        self.ax.plot([startX, endX], [startY, endY], [startZ, endZ],
                 'o-', ms='2', linewidth=0.5, color='r')
 
-    def plotLineOrange(self, ax, startPointV, endPointV):
+    def plotLineOrange(self):
+        startPointV = self.ray_start_pos
+        endPointV = self.ray_end_pos
         startX = startPointV[0]
         startY = startPointV[1]
         startZ = startPointV[2]
         endX = endPointV[0]
         endY = endPointV[1]
         endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
+        self.ax.plot([startX, endX], [startY, endY], [startZ, endZ],
                 'o-', ms='2', linewidth=0.5, color='orange')
+ 
+    def plotFourBeamLine(self, i):
+        if i == 0:
+            self.plotLineBlue()
+        elif i == 1:
+            self.plotLineGreen()
+        elif i == 2:
+            self.plotLineRed()
+        elif i == 3:
+            self.plotLineOrange()
+        else:
+            print("fourBeamPlotLine, iの値が不正です")
 
-    def plotLinePurple(self, ax, startPointV, endPointV):
+    def plotLinePurple(self, startPointV, endPointV):
         startX = startPointV[0]
         startY = startPointV[1]
         startZ = startPointV[2]
         endX = endPointV[0]
         endY = endPointV[1]
         endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
+        self.ax.plot([startX, endX], [startY, endY], [startZ, endZ],
                 'o-', ms='2', linewidth=0.5, color='purple')
 
-    def plotLineBlack(self, ax, startPointV, endPointV):
+    def plotLineBlack(self, startPointV, endPointV):
         startX = startPointV[0]
         startY = startPointV[1]
         startZ = startPointV[2]
         endX = endPointV[0]
         endY = endPointV[1]
         endZ = endPointV[2]
-        ax.plot([startX, endX], [startY, endY], [startZ, endZ],
+        self.ax.plot([startX, endX], [startY, endY], [startZ, endZ],
                 'o-', ms='2', linewidth=0.5, color='black')
